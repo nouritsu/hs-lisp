@@ -3,8 +3,13 @@ module Main where
 -- IMPORTS --
 
 import Control.Monad
+import Control.Monad.Except
+import Data.Functor
 import System.Environment
 import Text.ParserCombinators.Parsec hiding (spaces)
+
+-- TYPEDEFS --
+type ThrowsError = Either LispError
 
 -- DATA --
 data LispVal -- All Possible Lisp Tokens (Show defined)
@@ -15,14 +20,26 @@ data LispVal -- All Possible Lisp Tokens (Show defined)
   | String String
   | Bool Bool
 
+data LispError -- Parse Time / Run Time errors
+  = NumArgs Integer [LispVal]
+  | TypeMismatch String LispVal
+  | Parser ParseError
+  | BadSpecialForm String LispVal
+  | NotFunction String String
+  | UnboundVar String String
+  | Default String
+
 -- MAIN --
 main :: IO ()
-main = getArgs >>= print . eval . readExpr . head
+main = do
+  args <- getArgs
+  let evaled = fmap show $ readExpr (head args) >>= eval
+  putStrLn $ extractValue $ trapError evaled
 
-readExpr :: String -> LispVal
+readExpr :: String -> ThrowsError LispVal
 readExpr input = case parse parseExpr "lisp" input of
-  Left err -> String $ "No match: " ++ show err
-  Right val -> val
+  Left err -> throwError $ Parser err
+  Right val -> return val
 
 -- PARSER --
 
@@ -58,17 +75,22 @@ symbol :: Parser Char -- Matches given string of characters
 symbol = oneOf "!#$%&|*+-/:<=>?@^_~"
 
 -- EVALUATOR --
-eval :: LispVal -> LispVal
-eval val@(String _) = val
-eval val@(Number _) = val
-eval val@(Bool _) = val
-eval (List [Atom "quote", val]) = val
-eval (List (Atom func : args)) = apply func $ map eval args
+eval :: LispVal -> ThrowsError LispVal
+eval val@(String _) = return val
+eval val@(Number _) = return val
+eval val@(Bool _) = return val
+eval (List [Atom "quote", val]) = return val
+eval (List (Atom func : args)) = mapM eval args >>= apply func
+eval badForm = throwError $ BadSpecialForm "Unrecognised special form" badForm
 
-apply :: String -> [LispVal] -> LispVal
-apply func args = maybe (Bool False) ($ args) $ lookup func primitives
+apply :: String -> [LispVal] -> ThrowsError LispVal
+apply func args =
+  maybe
+    (throwError $ NotFunction "Unrecognized primitive function args" func)
+    ($ args)
+    (lookup func primitives)
 
-primitives :: [(String, [LispVal] -> LispVal)]
+primitives :: [(String, [LispVal] -> ThrowsError LispVal)]
 primitives =
   [ ("+", numericBinop (+)),
     ("-", numericBinop (-)),
@@ -79,22 +101,29 @@ primitives =
     ("remainder", numericBinop rem)
   ]
 
-numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> LispVal
-numericBinop op params = Number $ foldl1 op $ map unpackNum params
+numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> ThrowsError LispVal
+numericBinop op [] = throwError $ NumArgs 2 []
+numericBinop op singleVal@[_] = throwError $ NumArgs 2 singleVal
+numericBinop op params = mapM unpackNum params Data.Functor.<&> (Number . foldl1 op)
 
-unpackNum :: LispVal -> Integer
-unpackNum (Number n) = n
+unpackNum :: LispVal -> ThrowsError Integer
+unpackNum (Number n) = return n
 unpackNum (String s) =
-  let parsed = reads s :: [(Integer, String)]
+  let parsed = reads s
    in if null parsed
-        then 0
-        else fst $ head parsed
+        then throwError $ TypeMismatch "number" $ String s
+        else return $ fst $ head parsed
 unpackNum (List [n]) = unpackNum n
-unpackNum _ = 0
+unpackNum notNum = throwError $ TypeMismatch "number" notNum
 
--- PRIMITIVE FUNCTIONS --
+-- ERROR HANDLING --
+trapError :: (MonadError e m, Show e) => m String -> m String
+trapError action = catchError action (return . show)
 
--- SHOW --
+extractValue :: ThrowsError a -> a
+extractValue (Right val) = val
+
+-- SHOW VALUES --
 instance Show LispVal where show = showVal
 
 showVal :: LispVal -> String
@@ -108,3 +137,14 @@ showVal (DottedList head tail) = "(" ++ unwordsList head ++ " . " ++ showVal tai
 
 unwordsList :: [LispVal] -> String
 unwordsList = unwords . map showVal
+
+-- SHOW ERRORS --
+instance Show LispError where show = showError
+
+showError :: LispError -> String
+showError (UnboundVar message varName) = message ++ ": " ++ varName
+showError (BadSpecialForm message form) = message ++ ": " ++ show form
+showError (NotFunction message func) = message ++ ": " ++ show func
+showError (NumArgs expected found) = "Expected " ++ show expected ++ " args, found values " ++ unwordsList found
+showError (TypeMismatch expected found) = "Invalid type, expected " ++ expected ++ ", found" ++ show found
+showError (Parser err) = "Parse error at " ++ show err
