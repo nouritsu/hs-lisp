@@ -11,6 +11,7 @@ import Control.Monad
 import Control.Monad.Except
 import Data.Functor
 import System.Environment
+import System.IO
 import Text.ParserCombinators.Parsec hiding (spaces)
 
 -- TYPEDEFS --
@@ -40,18 +41,51 @@ data Unpacker = forall a. Eq a => AnyUnpacker (LispVal -> ThrowsError a)
 main :: IO ()
 main = do
   args <- getArgs
-  let evaled = liftM show $ readExpr (head args) >>= eval
-  putStrLn $ extractValue $ trapError evaled
+  case length args of
+    0 -> runRepl
+    1 -> evalAndPrint $ head args
+    _ -> putStrLn "Program takes either 0 or 1 arguments."
 
+-- REPL HELPERS --
+runRepl :: IO ()
+runRepl = until_ (== "quit") (readPrompt "Lisp :> ") evalAndPrint
+
+flushStr :: String -> IO ()
+flushStr str = putStr str >> hFlush stdout
+
+evalAndPrint :: String -> IO ()
+evalAndPrint expr = evalString expr >>= putStrLn
+
+readPrompt :: String -> IO String
+readPrompt prompt = flushStr prompt >> getLine
+
+evalString :: String -> IO String
+evalString expr = return $ extractValue $ trapError (liftM show $ readExpr expr >>= eval)
+
+until_ :: Monad m => (a -> Bool) -> m a -> (a -> m ()) -> m ()
+until_ pred prompt action = do
+  result <- prompt
+  if pred result
+    then return ()
+    else action result >> until_ pred prompt action
+
+-- PARSER --
 readExpr :: String -> ThrowsError LispVal
 readExpr input = case parse parseExpr "lisp" input of
   Left err -> throwError $ Parser err
   Right val -> return val
 
--- PARSER --
-
 parseExpr :: Parser LispVal
-parseExpr = parseAtom <|> parseString <|> parseNumber
+parseExpr =
+  parseAtom
+    <|> parseString
+    <|> parseNumber
+    <|> parseQuoted
+    <|> do
+      char '('
+      x <- try parseList <|> parseDottedList
+      char ')'
+      return x
 
 parseAtom :: Parser LispVal
 parseAtom = do
@@ -66,14 +100,27 @@ parseAtom = do
 parseString :: Parser LispVal
 parseString = do
   char '"'
-  x <- many (noneOf "\"\\" <|> (string "\\\"" >> return '"'))
+  x <- many (noneOf "\"")
   char '"'
   return $ String x
 
 parseNumber :: Parser LispVal
-parseNumber = do
-  num <- many1 digit
-  return $ Number $ read num
+parseNumber = liftM (Number . read) $ many1 digit
+
+parseList :: Parser LispVal
+parseList = liftM List $ sepBy parseExpr spaces
+
+parseDottedList :: Parser LispVal
+parseDottedList = do
+  head <- endBy parseExpr spaces
+  tail <- char '.' >> spaces >> parseExpr
+  return $ DottedList head tail
+
+parseQuoted :: Parser LispVal
+parseQuoted = do
+  char '\''
+  x <- parseExpr
+  return $ List [Atom "quote", x]
 
 spaces :: Parser () -- Matches (skips) spaces
 spaces = skipMany1 space
