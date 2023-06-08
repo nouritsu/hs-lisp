@@ -10,12 +10,18 @@ module Main where
 import Control.Monad
 import Control.Monad.Except
 import Data.Functor
+import Data.IORef
+import qualified Data.Maybe
 import System.Environment
 import System.IO
 import Text.ParserCombinators.Parsec hiding (spaces)
 
--- TYPEDEFS --
+-- SYNONYMS --
 type ThrowsError = Either LispError
+
+type IOThrowsError = ExceptT LispError IO
+
+type Env = IORef [(String, IORef LispVal)]
 
 -- DATA --
 data LispVal -- All Possible Lisp Tokens (Show defined)
@@ -43,24 +49,30 @@ main = do
   args <- getArgs
   case length args of
     0 -> runRepl
-    1 -> evalAndPrint $ head args
+    1 -> runOne $ head args
     _ -> putStrLn "Program takes either 0 or 1 arguments."
 
--- REPL HELPERS --
+-- IO HELPERS --
+runOne :: String -> IO ()
+runOne expr = nullEnv >>= flip evalAndPrint expr
+
 runRepl :: IO ()
-runRepl = until_ (== "quit") (readPrompt "Lisp :> ") evalAndPrint
+runRepl = nullEnv >>= until_ (== "quit") (readPrompt "List :> ") . evalAndPrint
+
+runIOThrows :: IOThrowsError String -> IO String
+runIOThrows action = runExceptT (trapError action) <&> extractValue
 
 flushStr :: String -> IO ()
 flushStr str = putStr str >> hFlush stdout
 
-evalAndPrint :: String -> IO ()
-evalAndPrint expr = evalString expr >>= putStrLn
+evalAndPrint :: Env -> String -> IO ()
+evalAndPrint env expr = evalString env expr >>= putStrLn
 
 readPrompt :: String -> IO String
 readPrompt prompt = flushStr prompt >> getLine
 
-evalString :: String -> IO String
-evalString expr = return $ extractValue $ trapError (liftM show $ readExpr expr >>= eval)
+evalString :: Env -> String -> IO String
+evalString env expr = runIOThrows $ liftM show $ liftThrows (readExpr expr) >>= eval env
 
 until_ :: Monad m => (a -> Bool) -> m a -> (a -> m ()) -> m ()
 until_ pred prompt action = do
@@ -68,6 +80,49 @@ until_ pred prompt action = do
   if pred result
     then return ()
     else action result >> until_ pred prompt action
+
+-- ENV --
+nullEnv :: IO Env
+nullEnv = newIORef []
+
+isBound :: Env -> String -> IO Bool
+isBound envRef var = readIORef envRef <&> (Data.Maybe.isJust . lookup var)
+
+defineVar :: Env -> String -> LispVal -> IOThrowsError LispVal
+defineVar envRef var value = do
+  alreadyDefined <- liftIO $ isBound envRef var
+  if alreadyDefined
+    then setVar envRef var value >> return value
+    else liftIO $ do
+      valueRef <- newIORef value
+      env <- readIORef envRef
+      writeIORef envRef ((var, valueRef) : env)
+      return value
+
+getVar :: Env -> String -> IOThrowsError LispVal
+getVar envRef var = do
+  env <- liftIO $ readIORef envRef
+  maybe
+    (throwError $ UnboundVar "Tried to get unbound variable" var)
+    (liftIO . readIORef)
+    (lookup var env)
+
+setVar :: Env -> String -> LispVal -> IOThrowsError LispVal
+setVar envRef var value = do
+  env <- liftIO $ readIORef envRef
+  maybe
+    (throwError $ UnboundVar "Tried to set unbound variable" var)
+    (liftIO . flip writeIORef value)
+    (lookup var env)
+  return value
+
+bindVars :: Env -> [(String, LispVal)] -> IO Env
+bindVars envRef bindings = readIORef envRef >>= extendEnv bindings >>= newIORef
+  where
+    extendEnv bindings env = liftM (++ env) (mapM addBinding bindings)
+    addBinding (var, value) = do
+      ref <- newIORef value
+      return (var, ref)
 
 -- PARSER --
 readExpr :: String -> ThrowsError LispVal
@@ -129,19 +184,24 @@ symbol :: Parser Char -- Matches given string of characters
 symbol = oneOf "!#$%&|*+-/:<=>?@^_~"
 
 -- EVALUATOR --
-eval :: LispVal -> ThrowsError LispVal
-eval val@(String _) = return val
-eval val@(Number _) = return val
-eval val@(Bool _) = return val
-eval (List [Atom "quote", val]) = return val
-eval (List (Atom func : args)) = mapM eval args >>= apply func
-eval (List [Atom "if", pred, conseq, alt]) =
+eval :: Env -> LispVal -> IOThrowsError LispVal
+eval env val@(String _) = return val
+eval env val@(Number _) = return val
+eval env val@(Bool _) = return val
+eval env (Atom id) = getVar env id
+eval env (List [Atom "quote", val]) = return val
+eval env (List [Atom "if", pred, conseq, alt]) =
   do
-    result <- eval pred
+    result <- eval env pred
     case result of
-      Bool False -> eval alt
-      _ -> eval conseq
-eval badForm = throwError $ BadSpecialForm "Unrecognised special form" badForm
+      Bool False -> eval env alt
+      _ -> eval env conseq
+eval env (List [Atom "set!", Atom var, form]) =
+  eval env form >>= setVar env var
+eval env (List [Atom "define", Atom var, form]) =
+  eval env form >>= defineVar env var
+eval env (List (Atom func : args)) = mapM (eval env) args >>= liftThrows . apply func
+eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 apply :: String -> [LispVal] -> ThrowsError LispVal
 apply func args =
@@ -281,6 +341,10 @@ unpackBool notBool = throwError $ TypeMismatch "boolean" notBool
 trapError :: (MonadError e m, Show e) => m String -> m String
 trapError action = catchError action (return . show)
 
+liftThrows :: ThrowsError a -> IOThrowsError a
+liftThrows (Left err) = throwError err
+liftThrows (Right val) = return val
+
 extractValue :: ThrowsError a -> a
 extractValue (Right val) = val
 
@@ -307,5 +371,5 @@ showError (UnboundVar message varName) = message ++ ": " ++ varName
 showError (BadSpecialForm message form) = message ++ ": " ++ show form
 showError (NotFunction message func) = message ++ ": " ++ show func
 showError (NumArgs expected found) = "Expected " ++ show expected ++ " args, found values " ++ unwordsList found
-showError (TypeMismatch expected found) = "Invalid type, expected " ++ expected ++ ", found" ++ show found
+showError (TypeMismatch expected found) = "Invalid type, expected " ++ expected ++ ", found " ++ show found
 showError (Parser err) = "Parse error at " ++ show err
