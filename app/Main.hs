@@ -1,4 +1,5 @@
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE InstanceSigs #-}
 {-# HLINT ignore "Use fmap" #-}
 {-# OPTIONS_GHC -Wno-overlapping-patterns #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
@@ -188,32 +189,41 @@ symbol = oneOf "!#$%&|*+-/:<=>?@^_~"
 
 -- EVALUATOR --
 eval :: Env -> LispVal -> IOThrowsError LispVal
-eval env val@(String _) = return val
-eval env val@(Number _) = return val
-eval env val@(Bool _) = return val
-eval env (Atom id) = getVar env id
-eval env (List [Atom "quote", val]) = return val
+eval env val@(String _) = return val -- string
+eval env val@(Number _) = return val -- number
+eval env val@(Bool _) = return val -- boolean
+eval env (Atom id) = getVar env id -- atomic Value
+eval env (List [Atom "quote", val]) = return val -- quote keyword
 eval env (List [Atom "if", pred, conseq, alt]) =
+  -- if statement
   do
     result <- eval env pred
     case result of
       Bool False -> eval env alt
       _ -> eval env conseq
 eval env (List [Atom "set!", Atom var, form]) =
+  -- set! keyword
   eval env form >>= setVar env var
 eval env (List [Atom "define", Atom var, form]) =
+  -- define variable
   eval env form >>= defineVar env var
 eval env (List (Atom "define" : List (Atom var : params) : body)) =
+  -- define function
   makeNormalFunc env params body >>= defineVar env var
 eval env (List (Atom "define" : DottedList (Atom var : params) varargs : body)) =
+  -- define function w/ varargs
   makeVarArgs varargs env params body >>= defineVar env var
 eval env (List (Atom "lambda" : List params : body)) =
+  -- define function
   makeNormalFunc env params body
 eval env (List (Atom "lambda" : DottedList params varargs : body)) =
+  -- define function w/ params + varargs
   makeVarArgs varargs env params body
 eval env (List (Atom "lambda" : varargs@(Atom _) : body)) =
+  -- define function w/ varargs
   makeVarArgs varargs env [] body
 eval env (List (function : args)) = do
+  -- function execution
   func <- eval env function
   argVals <- mapM (eval env) args
   apply func argVals
@@ -233,10 +243,13 @@ apply (Func params varargs body closure) args =
       Just argName -> liftIO $ bindVars env [(argName, List remainingArgs)]
       Nothing -> return env
 
+makeFunc :: Monad m => Maybe String -> Env -> [LispVal] -> [LispVal] -> m LispVal
 makeFunc varargs env params body = return $ Func (map showVal params) varargs body env
 
+makeNormalFunc :: Env -> [LispVal] -> [LispVal] -> ExceptT LispError IO LispVal
 makeNormalFunc = makeFunc Nothing
 
+makeVarArgs :: LispVal -> Env -> [LispVal] -> [LispVal] -> ExceptT LispError IO LispVal
 makeVarArgs = makeFunc . Just . showVal
 
 -- PRIMITIVES --
@@ -407,7 +420,9 @@ unwordsList :: [LispVal] -> String
 unwordsList = unwords . map showVal
 
 -- SHOW ERRORS --
-instance Show LispError where show = showError
+instance Show LispError where
+  show :: LispError -> String
+  show = showError
 
 showError :: LispError -> String
 showError (UnboundVar message varName) = message ++ ": " ++ varName
