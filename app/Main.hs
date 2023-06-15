@@ -54,7 +54,7 @@ data Unpacker = forall a. Eq a => AnyUnpacker (LispVal -> ThrowsError a)
 main :: IO ()
 main = do
   args <- getArgs
-  if null args then runRepl else runOne args
+  if null args then runRepl else runOne $ args
 
 -- IO HELPERS --
 runOne :: [String] -> IO ()
@@ -64,7 +64,7 @@ runOne args = do
     >>= hPutStrLn stderr
 
 runRepl :: IO ()
-runRepl = primitiveBindings >>= until_ (== "quit") (readPrompt "List :> ") . evalAndPrint
+runRepl = primitiveBindings >>= until_ (== "quit") (readPrompt "Lisp :> ") . evalAndPrint
 
 runIOThrows :: IOThrowsError String -> IO String
 runIOThrows action = runExceptT (trapError action) <&> extractValue
@@ -231,13 +231,14 @@ eval env (List (Atom "lambda" : DottedList params varargs : body)) =
 eval env (List (Atom "lambda" : varargs@(Atom _) : body)) =
   -- define function w/ varargs
   makeVarArgs varargs env [] body
+eval env (List [Atom "load", String filename]) =
+  load filename >>= liftM last . mapM (eval env)
 eval env (List (function : args)) = do
   -- function execution
   func <- eval env function
   argVals <- mapM (eval env) args
   apply func argVals
 eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
-eval env (List [Atom "load", String fileName]) = load fileName >>= liftM last . mapM (eval env)
 
 apply :: LispVal -> [LispVal] -> IOThrowsError LispVal
 apply (PrimitiveFunc func) args = liftThrows $ func args
@@ -391,10 +392,10 @@ readContents :: [LispVal] -> IOThrowsError LispVal
 readContents [String fileName] = liftM String $ liftIO $ readFile fileName
 
 load :: String -> IOThrowsError [LispVal]
-load fileName = liftIO (readFile fileName) >>= liftThrows . readExprList
+load filename = liftIO (readFile filename) >>= liftThrows . readExprList
 
 readAll :: [LispVal] -> IOThrowsError LispVal
-readAll [String fileName] = liftM List $ load fileName
+readAll [String filename] = liftM List $ load filename
 
 numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> ThrowsError LispVal
 numericBinop op [] = throwError $ NumArgs 2 []
