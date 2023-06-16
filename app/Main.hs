@@ -288,6 +288,7 @@ primitives =
     ("string>?", strBoolBinop (>)),
     ("string>=?", strBoolBinop (>=)),
     ("string<=?", strBoolBinop (<=)),
+    ("string/=?", strBoolBinop (/=)),
     ("car", car),
     ("cdr", cdr),
     ("cons", cons),
