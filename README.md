@@ -87,7 +87,7 @@ Read using - `read`, `read-contents` and `read-all`
 
 ## Standard Library
 A small subset of the Lisp STL has been implemented in the file `stdlib.lsp`.  
-The library can be loaded using `load <path-to-stdlib`.  
+The library can be loaded using `load <path-to-stdlib>`.  
 Open the file to find out which functions are defined in it.  
 
 # Footnotes
