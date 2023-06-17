@@ -54,7 +54,7 @@ data Unpacker = forall a. Eq a => AnyUnpacker (LispVal -> ThrowsError a)
 main :: IO ()
 main = do
   args <- getArgs
-  if null args then runRepl else runOne $ args
+  if null args then runRepl else runOne args
 
 -- IO HELPERS --
 runOne :: [String] -> IO ()
@@ -148,6 +148,7 @@ parseExpr =
   parseAtom
     <|> parseString
     <|> parseNumber
+    <|> parseBool
     <|> parseQuoted
     <|> do
       char '('
@@ -184,7 +185,60 @@ escapedChars = do
     't' -> '\t'
 
 parseNumber :: Parser LispVal
-parseNumber = many1 digit <&> (Number . read)
+parseNumber = parseDecDef <|> parseDecQual <|> parseHex <|> parseBin
+
+parseDecDef :: Parser LispVal
+parseDecDef = many1 digit <&> (Number . read)
+
+parseDecQual :: Parser LispVal
+parseDecQual = do
+  try $ string "#d"
+  x <- many1 digit
+  (return . Number . read) x
+
+parseHex :: Parser LispVal
+parseHex = do
+  try $ string "#x"
+  x <- many1 hexDigit
+  return $ Number (hex2dec x)
+  where
+    hex2dec :: String -> Integer
+    hex2dec [] = 0
+    hex2dec hxStr = hexChar (last hxStr) + 16 * hex2dec (init hxStr)
+
+    hexChar :: Char -> Integer
+    hexChar x
+      | x == '0' = 0
+      | x == '1' = 1
+      | x == '2' = 2
+      | x == '3' = 3
+      | x == '4' = 4
+      | x == '5' = 5
+      | x == '6' = 6
+      | x == '7' = 7
+      | x == '8' = 8
+      | x == '9' = 9
+      | x == 'A' || x == 'a' = 10
+      | x == 'B' || x == 'b' = 11
+      | x == 'C' || x == 'c' = 12
+      | x == 'D' || x == 'd' = 13
+      | x == 'E' || x == 'e' = 14
+      | x == 'F' || x == 'f' = 15
+
+parseBin :: Parser LispVal
+parseBin = do
+  try $ string "#b"
+  x <- many1 (oneOf "10")
+  return $ Number (bin2dec x)
+  where
+    bin2dec :: String -> Integer
+    bin2dec [] = 0
+    bin2dec xs = (if last xs == '0' then 0 else 1) + 2 * bin2dec (init xs)
+
+parseBool :: Parser LispVal
+parseBool = do
+  char '#'
+  (char 't' >> return (Bool True)) <|> (char 'f' >> return (Bool False))
 
 parseList :: Parser LispVal
 parseList = liftM List $ sepBy parseExpr spaces
@@ -204,8 +258,8 @@ parseQuoted = do
 spaces :: Parser () -- Matches (skips) spaces
 spaces = skipMany1 space
 
-symbol :: Parser Char -- Matches given string of characters
-symbol = oneOf "!#$%&|*+-/:<=>?@^_~"
+symbol :: Parser Char
+symbol = oneOf "!$%&|*+-/:<=>?@^_~"
 
 -- EVALUATOR --
 eval :: Env -> LispVal -> IOThrowsError LispVal
