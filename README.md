@@ -24,6 +24,16 @@ Running
 If file arg is not provided, interpreter will run in REPL mode.
 
 # Features
+## Literals
+### String Literals
+"\[content\]"  
+Note that strings are RSR5 compliant meaning they do support escape characters (escaped quotes, backslashes, newlines, carriage returns and tab)  
+  
+### Number Literals
+123, #b123, #x1a4, #d123  
+NOTE : CURRENTLY ONLY INTEGERS SUPPORTED  
+\# followed by b,x or d can denote binary, hexadecimal or denary.
+  
 Follows standard lisp syntax.
 ## Native Functions
 ### Math
