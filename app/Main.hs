@@ -10,6 +10,7 @@ module Main where
 
 import Control.Monad
 import Control.Monad.Except
+import Data.Char
 import Data.Functor
 import Data.IORef
 import Data.Maybe (isNothing)
@@ -204,26 +205,7 @@ parseHex = do
   where
     hex2dec :: String -> Integer
     hex2dec [] = 0
-    hex2dec xs = hexChar (last xs) + 16 * hex2dec (init xs)
-
-    hexChar :: Char -> Integer
-    hexChar x
-      | x == '0' = 0
-      | x == '1' = 1
-      | x == '2' = 2
-      | x == '3' = 3
-      | x == '4' = 4
-      | x == '5' = 5
-      | x == '6' = 6
-      | x == '7' = 7
-      | x == '8' = 8
-      | x == '9' = 9
-      | x == 'A' || x == 'a' = 10
-      | x == 'B' || x == 'b' = 11
-      | x == 'C' || x == 'c' = 12
-      | x == 'D' || x == 'd' = 13
-      | x == 'E' || x == 'e' = 14
-      | x == 'F' || x == 'f' = 15
+    hex2dec xs = toInteger (digitToInt $ last xs) + 16 * hex2dec (init xs)
 
 parseBin :: Parser LispVal
 parseBin = do
@@ -233,7 +215,7 @@ parseBin = do
   where
     bin2dec :: String -> Integer
     bin2dec [] = 0
-    bin2dec xs = (if last xs == '0' then 0 else 1) + 2 * bin2dec (init xs)
+    bin2dec xs = toInteger (digitToInt $ last xs) + 2 * bin2dec (init xs)
 
 parseBool :: Parser LispVal
 parseBool = do
