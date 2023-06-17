@@ -173,7 +173,7 @@ parseString = do
   return $ String x
 
 parseNumber :: Parser LispVal
-parseNumber = liftM (Number . read) $ many1 digit
+parseNumber = many1 digit <&> (Number . read)
 
 parseList :: Parser LispVal
 parseList = liftM List $ sepBy parseExpr spaces
