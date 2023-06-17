@@ -204,7 +204,7 @@ parseHex = do
   where
     hex2dec :: String -> Integer
     hex2dec [] = 0
-    hex2dec hxStr = hexChar (last hxStr) + 16 * hex2dec (init hxStr)
+    hex2dec xs = hexChar (last xs) + 16 * hex2dec (init xs)
 
     hexChar :: Char -> Integer
     hexChar x
